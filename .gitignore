@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Environment variables
+.env
+.env.local
+
+# Build outputs
+dist/
+build/
+.output/
+
+# OS files
+.DS_Store
+Thumbs.db
