@@ -35,6 +35,10 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 5.0
   },
+  ratingCount: {
+    type: Number,
+    default: 0
+  },
   borrowCredits: {
     type: Number,
     default: 50 // Starting bonus credits for the optional credit system

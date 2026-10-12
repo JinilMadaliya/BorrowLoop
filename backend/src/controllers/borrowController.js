@@ -158,3 +158,75 @@ module.exports = {
   approveBorrowRequest,
   rejectBorrowRequest
 };
+
+// @desc    Cancel a pending borrow request (by borrower)
+// @route   PUT /api/borrow-requests/:id/cancel
+// @access  Private
+const cancelBorrowRequest = async (req, res) => {
+  try {
+    const request = await BorrowRequest.findById(req.params.id);
+
+    if (!request) {
+      return res.status(404).json({ message: 'Borrow request not found' });
+    }
+
+    if (request.borrowerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to cancel this request' });
+    }
+
+    if (request.status !== 'PENDING') {
+      return res.status(400).json({ message: 'Only pending requests can be cancelled' });
+    }
+
+    request.status = 'CANCELLED';
+    await request.save();
+
+    res.json({ message: 'Borrow request cancelled successfully', request });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error: ' + error.message });
+  }
+};
+
+// @desc    Mark transaction as returned/completed
+// @route   PUT /api/transactions/:id/complete
+// @access  Private
+const completeTransaction = async (req, res) => {
+  try {
+    const transaction = await Transaction.findById(req.params.id).populate('itemId');
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Transaction not found' });
+    }
+
+    // Only owner or borrower can mark as returned
+    if (
+      transaction.ownerId.toString() !== req.user._id.toString() &&
+      transaction.borrowerId.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: 'Not authorized to complete this transaction' });
+    }
+
+    transaction.status = 'COMPLETED';
+    transaction.returnedAt = Date.now();
+    await transaction.save();
+
+    // Make the item available again
+    if (transaction.itemId) {
+      transaction.itemId.status = 'AVAILABLE';
+      await transaction.itemId.save();
+    }
+
+    res.json({ message: 'Transaction marked as completed and item is now available', transaction });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error: ' + error.message });
+  }
+};
+
+module.exports = {
+  createBorrowRequest,
+  getUserBorrowRequests,
+  approveBorrowRequest,
+  rejectBorrowRequest,
+  cancelBorrowRequest,
+  completeTransaction
+};
