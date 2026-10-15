@@ -38,4 +38,7 @@ const reviewSchema = new mongoose.Schema({
   }
 });
 
+// Ensure a user can only review a transaction once
+reviewSchema.index({ transactionId: 1, reviewerId: 1 }, { unique: true });
+
 module.exports = mongoose.model('Review', reviewSchema);

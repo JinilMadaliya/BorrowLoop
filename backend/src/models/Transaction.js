@@ -43,7 +43,7 @@ const transactionSchema = new mongoose.Schema({
   },
   conditionAfter: {
     type: String,
-    default: ''
+    default: 'Good'
   },
   returnedAt: {
     type: Date

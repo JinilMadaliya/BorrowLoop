@@ -5,14 +5,21 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "test:phase1": "node tests/phase1.test.js",
+    "test:phase2": "node tests/phase2.test.js",
+    "test:phase3": "node tests/phase3.test.js",
+    "test:phase4": "node tests/phase4.test.js",
+    "test:phase5": "node tests/phase5.test.js",
+    "test:phase6": "node tests/phase6.test.js",
+    "test:all": "node tests/phase1.test.js && node tests/phase2.test.js && node tests/phase3.test.js && node tests/phase4.test.js && node tests/phase5.test.js && node tests/phase6.test.js"
   },
   "dependencies": {
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.3.1"
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.11.1"
   }
 }

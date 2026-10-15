@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const BorrowRequest = require('../models/BorrowRequest');
 const Transaction = require('../models/Transaction');
 const Item = require('../models/Item');
@@ -9,9 +10,22 @@ const createBorrowRequest = async (req, res) => {
   try {
     const { itemId, startDate, endDate, message } = req.body;
 
+    if (!itemId || !startDate || !endDate) {
+      return res.status(400).json({ message: 'Please provide itemId, startDate, and endDate' });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(itemId)) {
+      return res.status(404).json({ message: 'Invalid item ID' });
+    }
+
     const item = await Item.findById(itemId);
     if (!item) {
       return res.status(404).json({ message: 'Item not found' });
+    }
+
+    // Business Rule: Item must not be set to UNAVAILABLE
+    if (item.status === 'UNAVAILABLE') {
+      return res.status(400).json({ message: 'This item is currently marked as unavailable by the owner' });
     }
 
     // Business Rule: A user cannot borrow their own item
@@ -22,17 +36,21 @@ const createBorrowRequest = async (req, res) => {
     const start = new Date(startDate);
     const end = new Date(endDate);
 
-    if (start >= end) {
-      return res.status(400).json({ message: 'End date must be after start date' });
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      return res.status(400).json({ message: 'Invalid start or end date format' });
     }
 
-    // Check for overlapping APPROVED requests for this item
+    if (start >= end) {
+      return res.status(400).json({ message: 'End date must be strictly after start date' });
+    }
+
+    // Boundary check for half-open intervals [startDate, endDate)
+    // Conflicting booking exists if (existingStart < requestedEnd) AND (existingEnd > requestedStart)
     const overlappingRequest = await BorrowRequest.findOne({
-      itemId,
+      itemId: item._id,
       status: 'APPROVED',
-      $or: [
-        { startDate: { $lte: end }, endDate: { $gte: start } }
-      ]
+      startDate: { $lt: end },
+      endDate: { $gt: start }
     });
 
     if (overlappingRequest) {
@@ -40,12 +58,12 @@ const createBorrowRequest = async (req, res) => {
     }
 
     const borrowRequest = await BorrowRequest.create({
-      itemId,
+      itemId: item._id,
       ownerId: item.ownerId,
       borrowerId: req.user._id,
       startDate: start,
       endDate: end,
-      message: message || ''
+      message: message ? message.trim() : ''
     });
 
     res.status(201).json(borrowRequest);
@@ -63,9 +81,10 @@ const getUserBorrowRequests = async (req, res) => {
     const requests = await BorrowRequest.find({
       $or: [{ borrowerId: req.user._id }, { ownerId: req.user._id }]
     })
-      .populate('itemId', 'title images pricePerDay location')
-      .populate('borrowerId', 'name rating profileImage')
-      .populate('ownerId', 'name rating profileImage');
+      .populate('itemId', 'title images pricePerDay securityDeposit location status')
+      .populate('borrowerId', 'name rating ratingCount profileImage email')
+      .populate('ownerId', 'name rating ratingCount profileImage email')
+      .sort({ createdAt: -1 });
 
     res.json(requests);
   } catch (error) {
@@ -78,10 +97,19 @@ const getUserBorrowRequests = async (req, res) => {
 // @access  Private
 const approveBorrowRequest = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Borrow request not found' });
+    }
+
     const request = await BorrowRequest.findById(req.params.id).populate('itemId');
 
     if (!request) {
       return res.status(404).json({ message: 'Borrow request not found' });
+    }
+
+    // Only pending requests can be approved
+    if (request.status !== 'PENDING') {
+      return res.status(400).json({ message: `Cannot approve request with status '${request.status}'` });
     }
 
     // Only the item owner can approve
@@ -89,25 +117,33 @@ const approveBorrowRequest = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to approve this request' });
     }
 
-    // Double check overlap before final approval
+    // Double check overlap against all approved bookings excluding current request
     const overlappingRequest = await BorrowRequest.findOne({
+      _id: { $ne: request._id },
       itemId: request.itemId._id,
       status: 'APPROVED',
-      $or: [
-        { startDate: { $lte: request.endDate }, endDate: { $gte: request.startDate } }
-      ]
+      startDate: { $lt: request.endDate },
+      endDate: { $gt: request.startDate }
     });
 
     if (overlappingRequest) {
-      return res.status(400).json({ message: 'Cannot approve: Date overlap with an existing approved booking' });
+      return res.status(400).json({
+        message: 'Cannot approve: Date overlap with an existing approved booking'
+      });
     }
 
     request.status = 'APPROVED';
     await request.save();
 
-    // Calculate total price based on days
+    // Set item status to BORROWED
+    if (request.itemId) {
+      request.itemId.status = 'BORROWED';
+      await request.itemId.save();
+    }
+
+    // Calculate total price based on duration in days
     const diffTime = Math.abs(new Date(request.endDate) - new Date(request.startDate));
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
+    const diffDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
     const totalAmount = diffDays * (request.itemId.pricePerDay || 0);
 
     // Create active transaction record
@@ -119,7 +155,7 @@ const approveBorrowRequest = async (req, res) => {
       endDate: request.endDate,
       amount: totalAmount,
       deposit: request.itemId.securityDeposit || 0,
-      conditionBefore: request.itemId.condition
+      conditionBefore: request.itemId.condition || 'Good'
     });
 
     res.json({ message: 'Request approved and transaction created', request, transaction });
@@ -133,10 +169,19 @@ const approveBorrowRequest = async (req, res) => {
 // @access  Private
 const rejectBorrowRequest = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Borrow request not found' });
+    }
+
     const request = await BorrowRequest.findById(req.params.id);
 
     if (!request) {
       return res.status(404).json({ message: 'Borrow request not found' });
+    }
+
+    // Only pending requests can be rejected
+    if (request.status !== 'PENDING') {
+      return res.status(400).json({ message: `Cannot reject request with status '${request.status}'` });
     }
 
     if (request.ownerId.toString() !== req.user._id.toString()) {
@@ -152,18 +197,15 @@ const rejectBorrowRequest = async (req, res) => {
   }
 };
 
-module.exports = {
-  createBorrowRequest,
-  getUserBorrowRequests,
-  approveBorrowRequest,
-  rejectBorrowRequest
-};
-
 // @desc    Cancel a pending borrow request (by borrower)
 // @route   PUT /api/borrow-requests/:id/cancel
 // @access  Private
 const cancelBorrowRequest = async (req, res) => {
   try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ message: 'Borrow request not found' });
+    }
+
     const request = await BorrowRequest.findById(req.params.id);
 
     if (!request) {
