@@ -15,7 +15,10 @@ import {
   Loader2,
   Calendar,
   Star,
-  CheckCheck
+  CheckCheck,
+  AlertTriangle,
+  Ban,
+  ShieldAlert
 } from 'lucide-react';
 
 const Dashboard = () => {
@@ -92,13 +95,13 @@ const Dashboard = () => {
     }
   };
 
-  // Handler for Transaction Completion
+  // Handler for Transaction Completion (Returned & Completed)
   const handleCompleteTransaction = async (transactionId) => {
     if (!window.confirm('Confirm that the item has been returned and handover is complete?')) {
       return;
     }
     try {
-      await api.put(`/transactions/${transactionId}/complete`);
+      await api.put(`/transactions/${transactionId}/complete`, { conditionAfter: 'Good' });
       setActionAlert({
         type: 'success',
         text: 'Transaction completed and item is now available again!'
@@ -106,6 +109,46 @@ const Dashboard = () => {
       fetchDashboardData();
     } catch (err) {
       setActionAlert({ type: 'error', text: err.message || 'Failed to complete transaction' });
+    }
+  };
+
+  // Handler for Lender Cancelling / Recalling Item
+  const handleCancelTransaction = async (transactionId) => {
+    const reason = window.prompt(
+      'Are you sure you want to recall this item? Enter an optional reason for the borrower:',
+      'Urgent personal requirement'
+    );
+    if (reason === null) return; // User pressed Cancel
+    try {
+      await api.put(`/transactions/${transactionId}/cancel`, { reason });
+      setActionAlert({
+        type: 'success',
+        text: 'Rental commitment cancelled. The item is now available again in your listings.'
+      });
+      fetchDashboardData();
+    } catch (err) {
+      setActionAlert({ type: 'error', text: err.message || 'Failed to cancel commitment' });
+    }
+  };
+
+  // Handler for Reporting Unreturned / Overdue Item
+  const handleReportOverdue = async (transactionId) => {
+    if (
+      !window.confirm(
+        'Report this item as not returned by the borrower? This will mark the transaction OVERDUE, retain the deposit to cover replacement, and apply a reputation strike to the borrower.'
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await api.put(`/transactions/${transactionId}/report-overdue`);
+      setActionAlert({
+        type: 'success',
+        text: res.data?.message || 'Item reported as overdue and borrower penalized.'
+      });
+      fetchDashboardData();
+    } catch (err) {
+      setActionAlert({ type: 'error', text: err.message || 'Failed to report overdue item' });
     }
   };
 
@@ -140,8 +183,14 @@ const Dashboard = () => {
         );
       case 'CANCELLED':
         return (
-          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">
-            Cancelled
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700 flex items-center gap-1">
+            <Ban className="w-3 h-3" /> Cancelled
+          </span>
+        );
+      case 'OVERDUE':
+        return (
+          <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 flex items-center gap-1">
+            <AlertTriangle className="w-3 h-3" /> Overdue (Penalty Applied)
           </span>
         );
       case 'ACTIVE':
@@ -381,20 +430,36 @@ const Dashboard = () => {
               const isUserOwner = tx.ownerId?._id === user?._id || tx.ownerId === user?._id;
               const isUserBorrower = tx.borrowerId?._id === user?._id || tx.borrowerId === user?._id;
 
+              const isPastDeadline = new Date() > new Date(tx.endDate);
+              const isLate = (tx.status === 'ACTIVE' && isPastDeadline) || tx.status === 'OVERDUE';
+              const daysLate = Math.max(1, Math.ceil((new Date() - new Date(tx.endDate)) / (1000 * 60 * 60 * 24)));
+              const estimatedLateFee = daysLate * (tx.itemId?.pricePerDay || 0);
+
               return (
                 <div
                   key={tx._id}
-                  className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  className={`bg-white rounded-2xl border p-5 shadow-sm flex flex-col justify-between gap-4 transition-all ${
+                    isLate && tx.status === 'ACTIVE'
+                      ? 'border-rose-300 ring-1 ring-rose-200'
+                      : 'border-slate-200'
+                  }`}
                 >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold text-slate-900">
-                        {tx.itemId?.title || 'Rental Item'}
-                      </span>
-                      {getStatusBadge(tx.status)}
-                      <span className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
-                        {isUserOwner ? 'Lending' : 'Borrowing'}
-                      </span>
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-slate-900">
+                          {tx.itemId?.title || 'Rental Item'}
+                        </span>
+                        {getStatusBadge(tx.status)}
+                        {tx.status === 'ACTIVE' && isPastDeadline && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-600 text-white flex items-center gap-1 animate-pulse">
+                            <AlertTriangle className="w-3 h-3" /> {daysLate}d Overdue
+                          </span>
+                        )}
+                        <span className="text-[11px] font-semibold text-slate-500 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded">
+                          {isUserOwner ? 'Lending' : 'Borrowing'}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
@@ -404,7 +469,10 @@ const Dashboard = () => {
                       <span>
                         Borrower: <strong className="text-slate-800">{tx.borrowerId?.name}</strong>
                       </span>
-                      <span>Amount: <strong className="text-slate-900">₹{tx.amount}</strong></span>
+                      <span>Rental Fee: <strong className="text-slate-900">₹{tx.amount}</strong></span>
+                      {tx.deposit > 0 && (
+                        <span>Deposit: <strong className="text-slate-900">₹{tx.deposit}</strong></span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1.5 text-xs text-slate-500">
@@ -413,17 +481,86 @@ const Dashboard = () => {
                         {formatDate(tx.startDate)} &rarr; {formatDate(tx.endDate)}
                       </span>
                     </div>
+
+                    {/* Overdue Warning Callout */}
+                    {tx.status === 'ACTIVE' && isPastDeadline && (
+                      <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 space-y-1">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                          <span>Rental Deadline Passed ({daysLate} day(s) overdue)</span>
+                        </div>
+                        <p className="text-[11px] text-rose-700">
+                          Accrued late fee: <strong>₹{estimatedLateFee}</strong>.
+                          {isUserBorrower
+                            ? ' Please return the item to the lender immediately to avoid additional penalty.'
+                            : ' As the lender, if the borrower fails to return, you can report overdue to retain the security deposit.'}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Reported Overdue Callout */}
+                    {tx.status === 'OVERDUE' && (
+                      <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <ShieldAlert className="w-4 h-4 text-amber-700 flex-shrink-0" />
+                          <span>Reported Overdue / Unreturned</span>
+                        </div>
+                        <p className="text-[11px] text-amber-800">
+                          Overdue: <strong>{tx.overdueDays} days</strong> | Late fee: <strong>₹{tx.lateFee}</strong> | Deposit retained: <strong>₹{tx.deposit}</strong>.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Cancelled by Lender Callout */}
+                    {tx.status === 'CANCELLED' && (
+                      <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-xs text-slate-700">
+                        <span className="font-semibold">Cancellation Note: </span>
+                        {tx.cancellationReason || 'Lender recalled item before/during rental.'}
+                      </div>
+                    )}
                   </div>
 
                   {/* Actions for Transactions */}
-                  <div className="flex items-center gap-2 self-end md:self-center">
-                    {tx.status === 'ACTIVE' && (
+                  <div className="flex flex-wrap items-center gap-2 self-end md:self-center pt-2 md:pt-0">
+                    {tx.status === 'ACTIVE' && isUserOwner && (
+                      <>
+                        <button
+                          onClick={() => handleCancelTransaction(tx._id)}
+                          title="If you urgently require the item, recall it and cancel commitment"
+                          className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 transition-colors"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          Recall / Cancel Rental
+                        </button>
+
+                        {isPastDeadline && (
+                          <button
+                            onClick={() => handleReportOverdue(tx._id)}
+                            title="Borrower has not returned the item past deadline"
+                            className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-amber-900 bg-amber-100 hover:bg-amber-200 border border-amber-300 transition-colors"
+                          >
+                            <ShieldAlert className="w-3.5 h-3.5" />
+                            Report Overdue & Retain Deposit
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => handleCompleteTransaction(tx._id)}
+                          className="inline-flex items-center gap-1 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 shadow-sm transition-all"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          Mark as Returned & Complete
+                        </button>
+                      </>
+                    )}
+
+                    {tx.status === 'ACTIVE' && isUserBorrower && (
                       <button
                         onClick={() => handleCompleteTransaction(tx._id)}
                         className="inline-flex items-center gap-1 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 shadow-sm transition-all"
                       >
                         <CheckCheck className="w-3.5 h-3.5" />
-                        Mark as Returned & Complete
+                        Mark as Returned
                       </button>
                     )}
 

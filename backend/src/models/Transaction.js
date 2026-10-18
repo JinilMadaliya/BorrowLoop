@@ -34,7 +34,7 @@ const transactionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['ACTIVE', 'RETURN_REQUESTED', 'COMPLETED'],
+    enum: ['ACTIVE', 'RETURN_REQUESTED', 'COMPLETED', 'CANCELLED', 'OVERDUE'],
     default: 'ACTIVE'
   },
   conditionBefore: {
@@ -44,6 +44,24 @@ const transactionSchema = new mongoose.Schema({
   conditionAfter: {
     type: String,
     default: 'Good'
+  },
+  overdueDays: {
+    type: Number,
+    default: 0
+  },
+  lateFee: {
+    type: Number,
+    default: 0
+  },
+  cancellationReason: {
+    type: String,
+    default: ''
+  },
+  cancelledAt: {
+    type: Date
+  },
+  reportedOverdueAt: {
+    type: Date
   },
   returnedAt: {
     type: Date
